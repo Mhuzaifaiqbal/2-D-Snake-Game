@@ -1,0 +1,725 @@
+#include <SFML/Graphics.hpp>
+#include <iostream>
+#include <deque>
+#include <ctime>
+#include <cstdlib>
+#include <vector>
+#include <stdexcept>
+#include <string>
+#include <cmath>
+#include <map>
+#include <fstream>
+#include <sstream>
+
+const int blockSize = 20;
+const int width = 30;
+const int height = 20;
+const int infoBarHeight = 40;
+
+enum Direction { UP, DOWN, LEFT, RIGHT };
+enum Difficulty { EASY, MEDIUM, HARD };
+enum SkinType { SNAKE_SKIN, FOOD_SKIN, WALL_SKIN, BOMB_SKIN, EXPLOSION_SKIN };
+
+struct SnakeSegment {
+    int x, y;
+    SnakeSegment(int x_, int y_) : x(x_), y(y_) {}
+};
+
+struct Bomber {
+    int x, y;
+    float timer;
+    bool active;
+    Bomber(int x_, int y_) : x(x_), y(y_), timer(0), active(false) {}
+};
+
+struct Skin {
+    std::string name;
+    std::string texturePath;
+    int cost;
+    bool unlocked;
+};
+
+class SnakeGame {
+private:
+    sf::RenderWindow window;
+    std::deque<SnakeSegment> snake;
+    Direction dir;
+    sf::Vector2i food;
+    sf::Clock clock;
+    float speed;
+    bool gameOver = false;
+    Difficulty difficulty;
+    int coins = 100;
+    bool inStore = false;
+
+    // Current skins
+    Skin currentSnakeSkin;
+    Skin currentFoodSkin;
+    Skin currentWallSkin;
+    Skin currentBombSkin;
+    Skin currentExplosionSkin;
+
+    // All available skins
+    std::map<SkinType, std::vector<Skin>> allSkins;
+
+    sf::Texture snakeTexture;
+    sf::Sprite snakeSprite;
+
+    sf::Texture appleTexture;
+    sf::Sprite appleSprite;
+
+    sf::Texture wallTexture;
+    sf::Sprite wallSprite;
+
+    sf::Texture bombTexture;
+    sf::Sprite bombSprite;
+
+    sf::Texture explosionTexture;
+    sf::Sprite explosionSprite;
+
+    sf::Font font;
+    sf::Text scoreText;
+    sf::Text coinText;
+    int score = 0;
+    int highestScore = 0;
+
+    std::vector<Bomber> bombers;
+    sf::Clock bomberClock;
+    float bomberSpawnTime = 5.0f;
+    float explosionDuration = 1.0f;
+
+    void loadSkins() {//this is too add various skins
+        allSkins[SNAKE_SKIN] = {
+            {"Default", "assets/Player1/Textures/snake_green_head_64.png", 0, true},
+            {"Yellow", "assets/Player1/Textures/snake_Yellow_head_64.png", 50, false},
+            
+            
+        };
+        currentSnakeSkin = allSkins[SNAKE_SKIN][0];
+
+        allSkins[FOOD_SKIN] = {
+            {"Apple", "assets/Player1/Textures/apple_alt_64.png", 0, true},
+            {"Donut", "assets/Player1/Textures/Donut64x64.png", 30, false},
+            {"CupCake", "assets/Player1/Textures/Cupcake64x64.png", 40, false},
+            {"Pastry", "assets/Player1/Textures/Pastry_64x64.png", 60, false}
+        };
+        currentFoodSkin = allSkins[FOOD_SKIN][0];
+
+        allSkins[WALL_SKIN] = {
+            {"Brick", "assets/Player1/Textures/wall_block_64_0.png", 0, true},
+           
+        };
+        currentWallSkin = allSkins[WALL_SKIN][0];
+
+        allSkins[BOMB_SKIN] = {
+            {"Default", "assets/Player1/Textures/bomb_64.png", 0, true},
+            
+        };
+        currentBombSkin = allSkins[BOMB_SKIN][0];
+
+        allSkins[EXPLOSION_SKIN] = {
+            {"Default", "assets/Player1/Textures/boom3.png", 0, true},
+           
+        };
+        currentExplosionSkin = allSkins[EXPLOSION_SKIN][0];
+    }
+
+    void loadCurrentTextures() {
+        if (!snakeTexture.loadFromFile(currentSnakeSkin.texturePath))
+            throw std::runtime_error("Failed to load snake texture");
+        if (!appleTexture.loadFromFile(currentFoodSkin.texturePath))
+            throw std::runtime_error("Failed to load food texture");
+        if (!wallTexture.loadFromFile(currentWallSkin.texturePath))
+            throw std::runtime_error("Failed to load wall texture");
+        if (!bombTexture.loadFromFile(currentBombSkin.texturePath))
+            throw std::runtime_error("Failed to load bomb texture");
+        if (!explosionTexture.loadFromFile(currentExplosionSkin.texturePath))
+            throw std::runtime_error("Failed to load explosion texture");
+
+        snakeSprite.setTexture(snakeTexture);
+        appleSprite.setTexture(appleTexture);
+        wallSprite.setTexture(wallTexture);
+        bombSprite.setTexture(bombTexture);
+        explosionSprite.setTexture(explosionTexture);
+
+        snakeSprite.setScale(blockSize / float(snakeTexture.getSize().x), blockSize / float(snakeTexture.getSize().y));
+        appleSprite.setScale(blockSize / float(appleTexture.getSize().x), blockSize / float(appleTexture.getSize().y));
+        wallSprite.setScale(blockSize / float(wallTexture.getSize().x), blockSize / float(wallTexture.getSize().y));
+        bombSprite.setScale(blockSize / float(bombTexture.getSize().x), blockSize / float(bombTexture.getSize().y));
+        explosionSprite.setScale(blockSize / float(explosionTexture.getSize().x), blockSize / float(explosionTexture.getSize().y));
+    }
+
+    void saveGameData() {
+        std::ofstream file("savedata.txt");
+        if (file.is_open()) {
+            file << coins << "\n";
+            file << highestScore << "\n";
+
+            for (auto& category : allSkins) {
+                for (auto& skin : category.second) {
+                    file << skin.unlocked << " ";
+                }
+                file << "\n";
+            }
+
+            file << currentSnakeSkin.name << "\n";
+            file << currentFoodSkin.name << "\n";
+            file << currentWallSkin.name << "\n";
+            file << currentBombSkin.name << "\n";
+            file << currentExplosionSkin.name << "\n";
+
+            file.close();
+        }
+    }
+
+    void loadGameData() {
+        std::ifstream file("savedata.txt");
+        if (file.is_open()) {
+            file >> coins;
+            file >> highestScore;
+
+            for (auto& category : allSkins) {
+                for (auto& skin : category.second) {
+                    bool unlocked;
+                    file >> unlocked;
+                    skin.unlocked = unlocked;
+                }
+            }
+
+            std::string line;
+            std::getline(file, line); // Clear newline
+            std::getline(file, line);
+            for (auto& skin : allSkins[SNAKE_SKIN]) {
+                if (skin.name == line) currentSnakeSkin = skin;
+            }
+
+            std::getline(file, line);
+            for (auto& skin : allSkins[FOOD_SKIN]) {
+                if (skin.name == line) currentFoodSkin = skin;
+            }
+
+            std::getline(file, line);
+            for (auto& skin : allSkins[WALL_SKIN]) {
+                if (skin.name == line) currentWallSkin = skin;
+            }
+
+            std::getline(file, line);
+            for (auto& skin : allSkins[BOMB_SKIN]) {
+                if (skin.name == line) currentBombSkin = skin;
+            }
+
+            std::getline(file, line);
+            for (auto& skin : allSkins[EXPLOSION_SKIN]) {
+                if (skin.name == line) currentExplosionSkin = skin;
+            }
+
+            file.close();
+        }
+    }
+
+public:
+    SnakeGame(Difficulty diff, int highScore = 0)
+        : window(sf::VideoMode(width* blockSize, height* blockSize + infoBarHeight), "Snake Game"), difficulty(diff), highestScore(highScore) {
+        loadSkins();
+        loadGameData();
+        loadCurrentTextures();
+
+        snake.push_back(SnakeSegment(width / 2, height / 2));
+        dir = RIGHT;
+
+        if (!font.loadFromFile("assets/Player1/Fonts/arial.ttf"))
+            throw std::runtime_error("Failed to load font");
+
+        scoreText.setFont(font);
+        scoreText.setCharacterSize(24);
+        scoreText.setFillColor(sf::Color::White);
+        scoreText.setPosition(10.f, height * blockSize + 5.f);
+
+        coinText.setFont(font);
+        coinText.setCharacterSize(24);
+        coinText.setFillColor(sf::Color::Yellow);
+        coinText.setPosition(width * blockSize - 150.f, height * blockSize + 5.f);
+
+        switch (difficulty) {
+        case EASY: speed = 0.2f; break;
+        case MEDIUM: speed = 0.12f; break;
+        case HARD: speed = 0.08f; bomberSpawnTime = 3.0f; break;
+        }
+
+        updateScoreText();
+        spawnFood();
+    }
+
+    ~SnakeGame() {
+        saveGameData();
+    }
+
+    void updateScoreText() {
+        scoreText.setString("Score: " + std::to_string(score) + "   Highest: " + std::to_string(highestScore));
+        coinText.setString("Coins: " + std::to_string(coins));
+    }
+
+    void spawnFood() {
+        do {
+            food.x = rand() % (width - 2) + 1;
+            food.y = rand() % (height - 2) + 1;
+        } while (isOnSnake(food) || isOnBomber(food));
+    }
+
+    bool isOnSnake(const sf::Vector2i& pos) {
+        for (const auto& segment : snake)
+            if (segment.x == pos.x && segment.y == pos.y)
+                return true;
+        return false;
+    }
+
+    bool isOnBomber(const sf::Vector2i& pos) {
+        for (const auto& bomber : bombers)
+            if (bomber.x == pos.x && bomber.y == pos.y)
+                return true;
+        return false;
+    }
+
+    void handleInput() {
+        if (inStore) return;
+
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up) && dir != DOWN) dir = UP;
+        else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down) && dir != UP) dir = DOWN;
+        else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left) && dir != RIGHT) dir = LEFT;
+        else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right) && dir != LEFT) dir = RIGHT;
+        else if (sf::Keyboard::isKeyPressed(sf::Keyboard::S)) {
+            inStore = true;
+            showStore();
+            inStore = false;
+        }
+    }
+
+    void spawnBomber() {
+        if (difficulty != HARD) return;
+
+        if (bomberClock.getElapsedTime().asSeconds() >= bomberSpawnTime) {
+            bomberClock.restart();
+
+            if (bombers.size() >= 3) return;
+
+            Bomber newBomber(0, 0);
+            do {
+                newBomber.x = rand() % (width - 2) + 1;
+                newBomber.y = rand() % (height - 2) + 1;
+            } while (isOnSnake({ newBomber.x, newBomber.y }) ||
+                (newBomber.x == food.x && newBomber.y == food.y) ||
+                isOnBomber({ newBomber.x, newBomber.y }));
+
+            bombers.push_back(newBomber);
+        }
+    }
+
+    void updateBombers() {
+        if (difficulty != HARD) return;
+
+        for (auto& bomber : bombers) {
+            if (!bomber.active) {
+                bomber.timer += clock.getElapsedTime().asSeconds();
+
+                if (bomber.timer >= 3.0f) {
+                    bomber.active = true;
+                    bomber.timer = 0;
+                }
+            }
+            else {
+                bomber.timer += clock.getElapsedTime().asSeconds();
+
+                if (bomber.timer >= explosionDuration) {
+                    bomber.active = false;
+                    bomber.timer = 0;
+                }
+            }
+        }
+
+        bombers.erase(std::remove_if(bombers.begin(), bombers.end(),
+            [](const Bomber& b) { return !b.active && b.timer >= 1.0f; }),
+            bombers.end());
+    }
+
+    bool checkBomberCollision(const SnakeSegment& head) {
+        for (const auto& bomber : bombers) {
+            if (bomber.active) {
+                if (std::abs(head.x - bomber.x) <= 1 && std::abs(head.y - bomber.y) <= 1) {
+                    return true;
+                }
+            }
+            else {
+                if (head.x == bomber.x && head.y == bomber.y) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    void update() {
+        if (inStore) return;
+
+        float elapsed = clock.getElapsedTime().asSeconds();
+        if (elapsed < speed) return;
+        clock.restart();
+
+        spawnBomber();
+        updateBombers();
+
+        SnakeSegment head = snake.front();
+        switch (dir) {
+        case UP: head.y--; break;
+        case DOWN: head.y++; break;
+        case LEFT: head.x--; break;
+        case RIGHT: head.x++; break;
+        }
+
+        if (head.x <= 0 || head.y <= 0 || head.x >= width - 1 || head.y >= height - 1 ||
+            isOnSnake({ head.x, head.y }) || checkBomberCollision(head)) {
+            gameOver = true;
+            coins += score * 2; // COINS AWARDING SYSTEM SET UP TILL THIS PART
+            if (score > highestScore) highestScore = score;
+            return;
+        }
+
+        snake.push_front(head);
+        if (head.x == food.x && head.y == food.y) {
+            score++;
+            if (score > highestScore) highestScore = score;
+            updateScoreText();
+            spawnFood();
+        }
+        else {
+            snake.pop_back();
+        }
+    }
+
+    void draw() {//Drawing part of my cod4e
+        window.clear(sf::Color(50, 50, 50));
+
+        for (int x = 0; x < width; x++) {
+            wallSprite.setPosition(x * blockSize, 0);
+            window.draw(wallSprite);
+            wallSprite.setPosition(x * blockSize, (height - 1) * blockSize);
+            window.draw(wallSprite);
+        }
+        for (int y = 1; y < height - 1; y++) {
+            wallSprite.setPosition(0, y * blockSize);
+            window.draw(wallSprite);
+            wallSprite.setPosition((width - 1) * blockSize, y * blockSize);
+            window.draw(wallSprite);
+        }
+
+        for (const auto& bomber : bombers) {
+            if (bomber.active) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    for (int dy = -1; dy <= 1; dy++) {
+                        int x = bomber.x + dx;
+                        int y = bomber.y + dy;
+                        if (x > 0 && x < width - 1 && y > 0 && y < height - 1) {
+                            explosionSprite.setPosition(x * blockSize, y * blockSize);
+                            window.draw(explosionSprite);
+                        }
+                    }
+                }
+            }
+            else {
+                bombSprite.setPosition(bomber.x * blockSize, bomber.y * blockSize);
+                window.draw(bombSprite);
+            }
+        }
+
+        for (const auto& segment : snake) {
+            snakeSprite.setPosition(segment.x * blockSize, segment.y * blockSize);
+            window.draw(snakeSprite);
+        }
+
+        appleSprite.setPosition(food.x * blockSize, food.y * blockSize);
+        window.draw(appleSprite);
+
+        sf::RectangleShape bar(sf::Vector2f(width * blockSize, infoBarHeight));
+        bar.setPosition(0, height * blockSize);
+        bar.setFillColor(sf::Color(30, 30, 30));
+        window.draw(bar);
+
+        window.draw(scoreText);
+        window.draw(coinText);
+
+        if (!inStore && !gameOver) {
+            sf::Text storePrompt("Press S for Store", font, 16);
+            storePrompt.setPosition(width * blockSize - 150.f, height * blockSize + 25.f);
+            storePrompt.setFillColor(sf::Color(180, 180, 180));
+            window.draw(storePrompt);
+        }
+
+        window.display();
+    }
+
+    void showStore() {
+        sf::RenderWindow storeWindow(sf::VideoMode(600, 500), "Skin Store");
+
+        SkinType currentCategory = SNAKE_SKIN;
+        int selectedItem = 0;
+        bool storeOpen = true;
+
+        while (storeOpen && storeWindow.isOpen()) {
+            sf::Event event;
+            while (storeWindow.pollEvent(event)) {
+                if (event.type == sf::Event::Closed) {
+                    storeOpen = false;
+                }
+                if (event.type == sf::Event::KeyPressed) {
+                    if (event.key.code == sf::Keyboard::Escape) {
+                        storeOpen = false;
+                    }
+                    if (event.key.code == sf::Keyboard::Right) {
+                        currentCategory = static_cast<SkinType>((currentCategory + 1) % 5);
+                        selectedItem = 0;
+                    }
+                    if (event.key.code == sf::Keyboard::Left) {
+                        currentCategory = static_cast<SkinType>((currentCategory + 4) % 5);
+                        selectedItem = 0;
+                    }
+                    if (event.key.code == sf::Keyboard::Up) {
+                        selectedItem = (selectedItem + allSkins[currentCategory].size() - 1) % allSkins[currentCategory].size();
+                    }
+                    if (event.key.code == sf::Keyboard::Down) {
+                        selectedItem = (selectedItem + 1) % allSkins[currentCategory].size();
+                    }
+                    if (event.key.code == sf::Keyboard::Enter) {
+                        Skin& skin = allSkins[currentCategory][selectedItem];
+                        if (!skin.unlocked && coins >= skin.cost) {
+                            coins -= skin.cost;
+                            skin.unlocked = true;
+                            applySkin(currentCategory, skin);
+                            updateScoreText();
+                        }
+                        else if (skin.unlocked) {
+                            applySkin(currentCategory, skin);
+                        }
+                    }
+                }
+            }
+
+            storeWindow.clear(sf::Color(30, 30, 50));
+
+            std::string categories[] = { "Snake", "Food", "Walls", "Bombs", "Explosions" };
+            for (int i = 0; i < 5; i++) {
+                sf::Text tab(categories[i], font, 20);
+                tab.setPosition(50 + i * 110, 20);
+                tab.setFillColor(i == currentCategory ? sf::Color::Yellow : sf::Color::White);
+                storeWindow.draw(tab);
+            }
+
+            for (size_t i = 0; i < allSkins[currentCategory].size(); i++) {
+                const Skin& skin = allSkins[currentCategory][i];
+                sf::Text itemText(skin.name + " (" + std::to_string(skin.cost) + " coins)", font, 18);
+                itemText.setPosition(50, 70 + i * 40);
+
+                if (i == selectedItem) {
+                    itemText.setFillColor(sf::Color::Green);
+                    sf::RectangleShape highlight(sf::Vector2f(500, 30));
+                    highlight.setPosition(45, 68 + i * 40);
+                    highlight.setFillColor(sf::Color(70, 70, 90));
+                    storeWindow.draw(highlight);
+                }
+                else if (!skin.unlocked) {
+                    itemText.setFillColor(sf::Color(150, 150, 150));
+                }
+                else {
+                    itemText.setFillColor(sf::Color::White);
+                }
+
+                if ((currentCategory == SNAKE_SKIN && skin.name == currentSnakeSkin.name) ||
+                    (currentCategory == FOOD_SKIN && skin.name == currentFoodSkin.name) ||
+                    (currentCategory == WALL_SKIN && skin.name == currentWallSkin.name) ||
+                    (currentCategory == BOMB_SKIN && skin.name == currentBombSkin.name) ||
+                    (currentCategory == EXPLOSION_SKIN && skin.name == currentExplosionSkin.name)) {
+                    sf::Text equippedText("EQUIPPED", font, 16);
+                    equippedText.setPosition(400, 70 + i * 40);
+                    equippedText.setFillColor(sf::Color::Cyan);
+                    storeWindow.draw(equippedText);
+                }
+
+                storeWindow.draw(itemText);
+            }
+
+            sf::Text coinBalance("Your coins: " + std::to_string(coins), font, 24);
+            coinBalance.setPosition(50, 400);
+            coinBalance.setFillColor(sf::Color::Yellow);
+            storeWindow.draw(coinBalance);
+
+            sf::Text instructions("Arrow keys to navigate | Enter to buy/equip | ESC to exit", font, 16);
+            instructions.setPosition(50, 450);
+            instructions.setFillColor(sf::Color(200, 200, 200));
+            storeWindow.draw(instructions);
+
+            storeWindow.display();
+        }
+    }
+
+    void applySkin(SkinType type, const Skin& skin) {
+        switch (type) {
+        case SNAKE_SKIN:
+            currentSnakeSkin = skin;
+            break;
+        case FOOD_SKIN:
+            currentFoodSkin = skin;
+            break;
+        case WALL_SKIN:
+            currentWallSkin = skin;
+            break;
+        case BOMB_SKIN:
+            currentBombSkin = skin;
+            break;
+        case EXPLOSION_SKIN:
+            currentExplosionSkin = skin;
+            break;
+        }
+        loadCurrentTextures();
+    }
+
+    void showGameOverScreen() {
+        sf::Text over("Game Over!", font, 48);
+        sf::Text finalScore("Score: " + std::to_string(score) + " (+" + std::to_string(score * 2) + " coins)", font, 30);
+        sf::Text highestScoreText("Highest Score: " + std::to_string(highestScore), font, 30);
+        sf::Text totalCoins("Total Coins: " + std::to_string(coins), font, 30);
+        sf::Text restart("Press R to Restart, S for Store, or ESC to Exit", font, 24);
+
+        auto centerText = [&](sf::Text& text, float y) {
+            sf::FloatRect bounds = text.getLocalBounds();
+            text.setOrigin(bounds.left + bounds.width / 2.f, bounds.top + bounds.height / 2.f);
+            text.setPosition(window.getSize().x / 2.f, y);
+            };
+
+        centerText(over, 150);
+        centerText(finalScore, 220);
+        centerText(highestScoreText, 260);
+        centerText(totalCoins, 300);
+        centerText(restart, 360);
+
+        window.clear(sf::Color(20, 20, 20));
+        window.draw(over);
+        window.draw(finalScore);
+        window.draw(highestScoreText);
+        window.draw(totalCoins);
+        window.draw(restart);
+        window.display();
+
+        while (window.isOpen()) {
+            sf::Event e;
+            while (window.pollEvent(e)) {
+                if (e.type == sf::Event::Closed) window.close();
+            }
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Escape)) {
+                window.close();
+            }
+            else if (sf::Keyboard::isKeyPressed(sf::Keyboard::R)) {
+                SnakeGame newGame(difficulty, highestScore);
+                newGame.run();
+                return;
+            }
+            else if (sf::Keyboard::isKeyPressed(sf::Keyboard::S)) {
+                showStore();
+                window.clear(sf::Color(20, 20, 20));
+                window.draw(over);
+                window.draw(finalScore);
+                window.draw(highestScoreText);
+                window.draw(totalCoins);
+                window.draw(restart);
+                window.display();
+            }
+        }
+    }
+
+    void run() {
+        while (window.isOpen()) {
+            sf::Event e;
+            while (window.pollEvent(e)) {
+                if (e.type == sf::Event::Closed) window.close();
+                if (e.type == sf::Event::KeyPressed && e.key.code == sf::Keyboard::S && !gameOver) {
+                    showStore();
+                }
+            }
+
+            if (!gameOver) {
+                handleInput();
+                update();
+                draw();
+            }
+            else {
+                showGameOverScreen();
+            }
+        }
+    }
+};
+
+Difficulty showMenu() {
+    sf::RenderWindow menu(sf::VideoMode(400, 300), "Snake Game - Main Menu");
+    sf::Font font;
+    if (!font.loadFromFile("assets/Player1/Fonts/arial.ttf"))
+        throw std::runtime_error("Failed to load font");
+
+    sf::Text title("SNAKE GAME", font, 36);
+    title.setPosition(100, 30);
+    title.setFillColor(sf::Color::Green);
+
+    sf::Text options[3] = {
+        sf::Text("Easy", font, 24),
+        sf::Text("Medium", font, 24),
+        sf::Text("Hard (with bombers!)", font, 24)
+    };
+
+    int selected = 0;
+    for (int i = 0; i < 3; ++i) {
+        options[i].setPosition(150, 100 + i * 50);
+    }
+
+    while (menu.isOpen()) {
+        sf::Event e;
+        while (menu.pollEvent(e)) {
+            if (e.type == sf::Event::Closed) menu.close();
+            if (e.type == sf::Event::KeyPressed) {
+                if (e.key.code == sf::Keyboard::Up) selected = (selected + 2) % 3;
+                if (e.key.code == sf::Keyboard::Down) selected = (selected + 1) % 3;
+                if (e.key.code == sf::Keyboard::Enter) {
+                    menu.close();
+                    return static_cast<Difficulty>(selected);
+                }
+            }
+        }
+
+        for (int i = 0; i < 3; ++i) {
+            options[i].setFillColor(i == selected ? sf::Color::Yellow : sf::Color::White);
+        }
+
+        menu.clear(sf::Color(20, 20, 20));
+        menu.draw(title);
+        for (auto& option : options)
+            menu.draw(option);
+
+        sf::Text instructions("Use arrow keys to select\nPress Enter to start", font, 16);
+        instructions.setPosition(100, 250);
+        instructions.setFillColor(sf::Color(180, 180, 180));
+        menu.draw(instructions);
+
+        menu.display();
+    }
+
+    return MEDIUM;
+}
+
+int main() {
+    srand(static_cast<unsigned>(time(nullptr)));
+    try {
+        Difficulty diff = showMenu();
+        SnakeGame game(diff);
+        game.run();
+    }
+    catch (const std::runtime_error& e) {
+        printf("Error: %s\n", e.what());
+        return EXIT_FAILURE;
+    }
+    return 0;
+}
